@@ -3,13 +3,14 @@ import mysql.connector
 from mysql.connector import Error
 import joblib
 
-# Load model Logistic Regression
+# Load model dan info
 try:
-    model = joblib.load('model_logistic_portable.pkl')
-except FileNotFoundError:
-    raise FileNotFoundError("Model file tidak ditemukan.")
+    model = joblib.load('logistic_model.pkl')
+    label_encoder = joblib.load('label_encoder.pkl')
+    model_columns = joblib.load('model_columns.pkl')
+except FileNotFoundError as e:
+    raise FileNotFoundError(f"File model tidak ditemukan: {e}")
 
-# Buat koneksi ke database MySQL
 def create_connection():
     try:
         conn = mysql.connector.connect(
@@ -22,9 +23,7 @@ def create_connection():
     except Error as e:
         raise ConnectionError(f"Koneksi ke database gagal: {e}")
 
-# Fungsi untuk prediksi gaji dari input pengguna
 def predict_salary(data: dict):
-    # Buat DataFrame dari input
     input_df = pd.DataFrame([{
         'Umur': int(data['umur']),
         'Kelas Pekerja': data['kelas_pekerja'],
@@ -33,38 +32,28 @@ def predict_salary(data: dict):
         'Pekerjaan': data['pekerjaan'],
         'Jenis Kelamin': data['jenis_kelamin'],
         'Jam per Minggu': float(data['jam_per_minggu']),
-
-        # Kolom tambahan yang sudah dihapus di frontend tapi diperlukan model
         'Berat Akhir': 1,
         'Jmlh Tahun Pendidikan': 10,
         'Keuntungan Kapital': 0.0,
         'Kerugian Capital': 0.0
     }])
 
-    # Mapping nilai kategorikal (jenis kelamin)
-    input_df['Jenis Kelamin'] = input_df['Jenis Kelamin'].map({'Perempuan': 0, 'Laki2': 1})
+    input_df['Jenis Kelamin'] = input_df['Jenis Kelamin'].map({'Laki-laki': 1, 'Perempuan': 0})
 
-    # One-hot encoding
     input_encoded = pd.get_dummies(input_df)
 
-    # Tambahkan kolom yang tidak muncul agar cocok dengan model
-    for col in model.feature_names_in_:
+    for col in model_columns:
         if col not in input_encoded.columns:
             input_encoded[col] = 0
 
-    # Pastikan urutan kolom sama dengan saat training
-    input_encoded = input_encoded[model.feature_names_in_]
+    input_encoded = input_encoded[model_columns].fillna(0)
 
-    # ✅ Penting: hilangkan semua NaN agar tidak error
-    input_encoded = input_encoded.fillna(0)
+    pred_proba = model.predict_proba(input_encoded)[0][1]  # Probabilitas gaji > 7jt
+    pred_label = model.predict(input_encoded)[0]
+    kategori = '>7jt' if pred_label == 1 else '<=7jt'
 
-    # Prediksi
-    pred = model.predict(input_encoded)[0]
-    kategori = '>7jt' if pred == 1 else '<=7jt'
+    return kategori, pred_proba, input_df
 
-    return kategori, input_df
-
-# Simpan input + hasil prediksi ke database
 def save_to_database(data: dict, gaji: str):
     conn = create_connection()
     cursor = conn.cursor()
@@ -90,7 +79,6 @@ def save_to_database(data: dict, gaji: str):
     cursor.close()
     conn.close()
 
-# Ambil semua hasil prediksi dari database
 def fetch_all_predictions():
     conn = create_connection()
     cursor = conn.cursor(dictionary=True)
